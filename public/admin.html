@@ -8,13 +8,18 @@
 
 <div class="container">
   <h2>Generate QR</h2>
+
   <button onclick="generate()">Generate QR</button>
 
   <div class="info" id="status"></div>
+  <div class="timer" id="timer"></div>
+
   <img id="qr">
 </div>
 
 <script>
+let countdownInterval;
+
 function generate() {
   document.getElementById("status").innerText = "Fetching location...";
 
@@ -32,9 +37,38 @@ function generate() {
     .then(d => {
       document.getElementById("qr").src = d.qr;
       document.getElementById("status").innerText =
-        `Generated: ${d.generatedAt}\nExpires: ${d.expiresAt}`;
+        `QR Generated\nExpires at: ${d.expiresAt}`;
+
+      startTimer(120); // 2 minutes
     });
   });
+}
+
+function startTimer(seconds) {
+  clearInterval(countdownInterval);
+
+  const timerDiv = document.getElementById("timer");
+  let remaining = seconds;
+
+  countdownInterval = setInterval(() => {
+    const min = Math.floor(remaining / 60);
+    const sec = remaining % 60;
+
+    timerDiv.innerText = `Auto-download in ${min}:${sec.toString().padStart(2, "0")}`;
+
+    if (remaining <= 0) {
+      clearInterval(countdownInterval);
+      timerDiv.innerText = "Session ended. Downloading CSV...";
+      autoDownloadCSV();
+    }
+
+    remaining--;
+  }, 1000);
+}
+
+function autoDownloadCSV() {
+  // Trigger CSV download
+  window.location.href = "/download";
 }
 </script>
 
