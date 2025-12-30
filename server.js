@@ -1,49 +1,37 @@
 const express = require("express");
 const qrcode = require("qrcode");
-const { google } = require("googleapis");
+const path = require("path");
 
 const app = express();
 app.use(express.json());
 app.use(express.static("public"));
 
-/* ===== GOOGLE SHEETS CONFIG ===== */
-const SCOPES = ["https://www.googleapis.com/auth/spreadsheets"];
-const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
-
-const auth = new google.auth.GoogleAuth({
-  credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
-  scopes: SCOPES,
-});
-
-const sheets = google.sheets({ version: "v4", auth });
-
-/* ===== TIMEZONE CONFIG (INDIA) ===== */
-const IST_TIME = {
-  timeZone: "Asia/Kolkata",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-  hour12: true,
-};
-
-const IST_DATE = {
-  timeZone: "Asia/Kolkata",
-  year: "numeric",
-  month: "long",
-  day: "numeric",
-  hour: "2-digit",
-  minute: "2-digit",
-  hour12: true,
-};
-
-/* ===== SESSION DATA ===== */
 let currentSession = null;
 let attendance = [];
 
-/* ===== DISTANCE FUNCTION ===== */
+/* =========================
+   Utility: IST Time Helpers
+========================= */
+function nowIST() {
+  return new Date(
+    new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+  );
+}
+
+function formatIST(date) {
+  return date.toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    hour12: true
+  });
+}
+
+/* =========================
+   Haversine Distance (meters)
+========================= */
 function distance(lat1, lon1, lat2, lon2) {
   const R = 6371000;
   const toRad = v => (v * Math.PI) / 180;
+
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
 
@@ -56,11 +44,24 @@ function distance(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-/* ===== ADMIN: GENERATE QR ===== */
+/* =========================
+   ROOT ROUTE (FIX)
+========================= */
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "admin.html"));
+});
+
+/* =========================
+   Generate QR (Admin)
+========================= */
 app.post("/generate-qr", (req, res) => {
   const { lat, lon, accuracy } = req.body;
 
-  const generatedAt = new Date();
+  if (!lat || !lon || !accuracy) {
+    return res.status(400).json({ error: "Location not received" });
+  }
+
+  const generatedAt = nowIST();
   const expiresAt = new Date(generatedAt.getTime() + 2 * 60 * 1000);
 
   currentSession = {
@@ -68,7 +69,7 @@ app.post("/generate-qr", (req, res) => {
     generatedAt,
     expiresAt,
     adminLocation: { lat, lon, accuracy },
-    usedDevices: new Set(),
+    usedDevices: new Set()
   };
 
   attendance = [];
@@ -78,24 +79,31 @@ app.post("/generate-qr", (req, res) => {
   qrcode.toDataURL(qrURL).then(qr => {
     res.json({
       qr,
-      generatedAt: generatedAt.toLocaleString("en-IN", IST_DATE),
-      expiresAt: expiresAt.toLocaleString("en-IN", IST_DATE),
+      generatedAt: formatIST(generatedAt),
+      expiresAt: formatIST(expiresAt)
     });
   });
 });
 
-/* ===== STUDENT: MARK ATTENDANCE ===== */
-app.post("/mark-attendance", async (req, res) => {
+/* =========================
+   Mark Attendance (Student)
+========================= */
+app.post("/mark-attendance", (req, res) => {
   const { name, roll, deviceId, sessionId, lat, lon, accuracy } = req.body;
 
-  if (!currentSession || sessionId !== currentSession.id)
-    return res.status(400).json({ error: "Invalid session" });
+  if (!currentSession || sessionId !== currentSession.id) {
+    return res.status(400).json({ error: "Invalid or expired session" });
+  }
 
-  if (new Date() > currentSession.expiresAt)
-    return res.status(403).json({ error: "QR expired" });
+  const now = nowIST();
 
-  if (currentSession.usedDevices.has(deviceId))
-    return res.status(403).json({ error: "Attendance already marked from this device" });
+  if (now > currentSession.expiresAt) {
+    return res.status(403).json({ error: "QR code expired" });
+  }
+
+  if (currentSession.usedDevices.has(deviceId)) {
+    return res.status(403).json({ error: "Attendance already marked on this device" });
+  }
 
   const d = distance(
     lat,
@@ -104,42 +112,40 @@ app.post("/mark-attendance", async (req, res) => {
     currentSession.adminLocation.lon
   );
 
+  // MDN-compliant accuracy handling
   const effectiveDistance =
     d - accuracy - currentSession.adminLocation.accuracy;
 
-  if (effectiveDistance > 50)
-    return res.status(403).json({ error: "Outside 50m range" });
+  if (effectiveDistance > 50) {
+    return res.status(403).json({
+      error: `Outside allowed range (${Math.round(effectiveDistance)} meters)`
+    });
+  }
 
   currentSession.usedDevices.add(deviceId);
 
-  const now = new Date();
-  const record = {
+  attendance.push({
     name,
     roll,
-    time: now.toLocaleTimeString("en-IN", IST_TIME),
-  };
-
-  attendance.push(record);
-
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: SPREADSHEET_ID,
-    range: "Attendance!A:C",
-    valueInputOption: "RAW",
-    resource: { values: [[record.name, record.roll, record.time]] },
+    time: formatIST(now)
   });
 
   res.json({ success: true });
 });
 
-/* ===== ADMIN: DOWNLOAD CSV ===== */
+/* =========================
+   Download CSV (Admin)
+========================= */
 app.get("/download", (req, res) => {
-  if (!currentSession) return res.status(400).send("No session");
+  if (!currentSession) {
+    return res.status(400).send("No attendance session available");
+  }
 
   let csv = "";
-  csv += `QR Generated At,${currentSession.generatedAt.toLocaleString("en-IN", IST_DATE)}\n`;
-  csv += `QR Expires At,${currentSession.expiresAt.toLocaleString("en-IN", IST_DATE)}\n`;
+  csv += `QR Generated At,${formatIST(currentSession.generatedAt)}\n`;
+  csv += `QR Expires At,${formatIST(currentSession.expiresAt)}\n`;
   csv += `Attendance Window,2 Minutes\n\n`;
-  csv += "Name,Roll No,Time\n";
+  csv += "Name,Roll No,Time (IST)\n";
 
   attendance.forEach(a => {
     csv += `${a.name},${a.roll},${a.time}\n`;
@@ -150,5 +156,10 @@ app.get("/download", (req, res) => {
   res.send(csv);
 });
 
+/* =========================
+   Start Server
+========================= */
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Server running on port", PORT));
+app.listen(PORT, () =>
+  console.log("Server running on port", PORT)
+);
