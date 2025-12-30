@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Admin - Generate QR</title>
+  <title>Admin - QR Attendance</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -9,19 +9,25 @@
 <div class="container">
   <h2>Generate QR</h2>
 
-  <button onclick="generate()">Generate QR</button>
+  <button onclick="generateQR()">Generate QR</button>
 
-  <div class="info" id="status"></div>
-  <div class="timer" id="timer"></div>
+  <p id="info"></p>
+  <p id="notice" style="color:red;font-weight:bold;"></p>
 
-  <img id="qr">
+  <img id="qr" style="display:none">
+
+  <br><br>
+  <button id="downloadBtn" style="display:none" onclick="downloadCSV()">
+    Download Attendance CSV
+  </button>
 </div>
 
 <script>
-let countdownInterval;
+let timer = null;
 
-function generate() {
-  document.getElementById("status").innerText = "Fetching location...";
+function generateQR() {
+  document.getElementById("notice").innerText = "";
+  document.getElementById("downloadBtn").style.display = "none";
 
   navigator.geolocation.getCurrentPosition(pos => {
     fetch("/generate-qr", {
@@ -33,41 +39,38 @@ function generate() {
         accuracy: pos.coords.accuracy
       })
     })
-    .then(r => r.json())
-    .then(d => {
-      document.getElementById("qr").src = d.qr;
-      document.getElementById("status").innerText =
-        `QR Generated\nExpires at: ${d.expiresAt}`;
+    .then(res => res.json())
+    .then(data => {
+      document.getElementById("qr").src = data.qr;
+      document.getElementById("qr").style.display = "block";
 
-      startTimer(120); // 2 minutes
+      document.getElementById("info").innerHTML = `
+        QR Generated: ${data.generatedAt}<br>
+        Expires At: ${data.expiresAt}
+      `;
+
+      startPolling();
     });
   });
 }
 
-function startTimer(seconds) {
-  clearInterval(countdownInterval);
+function startPolling() {
+  clearInterval(timer);
 
-  const timerDiv = document.getElementById("timer");
-  let remaining = seconds;
+  timer = setInterval(async () => {
+    const res = await fetch("/session-status");
+    const data = await res.json();
 
-  countdownInterval = setInterval(() => {
-    const min = Math.floor(remaining / 60);
-    const sec = remaining % 60;
-
-    timerDiv.innerText = `Auto-download in ${min}:${sec.toString().padStart(2, "0")}`;
-
-    if (remaining <= 0) {
-      clearInterval(countdownInterval);
-      timerDiv.innerText = "Session ended. Downloading CSV...";
-      autoDownloadCSV();
+    if (!data.active) {
+      document.getElementById("notice").innerText =
+        "Session ended. Attendance closed.";
+      document.getElementById("downloadBtn").style.display = "inline-block";
+      clearInterval(timer);
     }
-
-    remaining--;
   }, 1000);
 }
 
-function autoDownloadCSV() {
-  // Trigger CSV download
+function downloadCSV() {
   window.location.href = "/download";
 }
 </script>
