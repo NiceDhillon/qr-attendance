@@ -23,7 +23,7 @@
 </div>
 
 <script>
-let timer = null;
+let poller = null;
 
 function generateQR() {
   document.getElementById("notice").innerText = "";
@@ -55,9 +55,9 @@ function generateQR() {
 }
 
 function startPolling() {
-  clearInterval(timer);
+  clearInterval(poller);
 
-  timer = setInterval(async () => {
+  poller = setInterval(async () => {
     const res = await fetch("/session-status");
     const data = await res.json();
 
@@ -65,7 +65,7 @@ function startPolling() {
       document.getElementById("notice").innerText =
         "Session ended. Attendance closed.";
       document.getElementById("downloadBtn").style.display = "inline-block";
-      clearInterval(timer);
+      clearInterval(poller);
     }
   }, 1000);
 }

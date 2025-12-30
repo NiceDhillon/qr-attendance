@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Student - Attendance</title>
+  <title>Student - Mark Attendance</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -13,7 +13,7 @@
   <input id="roll" placeholder="Roll Number">
   <button onclick="mark()">Submit</button>
 
-  <div class="info" id="status"></div>
+  <p id="status"></p>
 </div>
 
 <script>
@@ -41,10 +41,10 @@ function mark() {
         accuracy: pos.coords.accuracy
       })
     })
-    .then(r => r.json())
-    .then(d => {
+    .then(res => res.json())
+    .then(data => {
       document.getElementById("status").innerText =
-        d.success ? "Attendance marked successfully ✅" : d.error;
+        data.success ? "Attendance marked successfully ✅" : data.error;
     });
   });
 }
