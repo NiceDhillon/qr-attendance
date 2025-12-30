@@ -1,14 +1,30 @@
 const express = require("express");
 const qrcode = require("qrcode");
+const { google } = require("googleapis");
 
 const app = express();
 app.use(express.json());
 app.use(express.static("public"));
 
+/* ================= GOOGLE SHEETS SETUP ================= */
+
+const SCOPES = ["https://www.googleapis.com/auth/spreadsheets"];
+const SPREADSHEET_ID = process.env.SPREADSHEET_ID; // set in Render ENV
+
+const auth = new google.auth.GoogleAuth({
+  credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
+  scopes: SCOPES,
+});
+
+const sheets = google.sheets({ version: "v4", auth });
+
+/* ================= SESSION DATA ================= */
+
 let currentSession = null;
 let attendance = [];
 
-// Haversine distance
+/* ================= DISTANCE FUNCTION ================= */
+
 function distance(lat1, lon1, lat2, lon2) {
   const R = 6371000;
   const toRad = v => (v * Math.PI) / 180;
@@ -24,7 +40,8 @@ function distance(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// Generate QR (Admin)
+/* ================= ADMIN: GENERATE QR ================= */
+
 app.post("/generate-qr", (req, res) => {
   const { lat, lon, accuracy } = req.body;
 
@@ -36,7 +53,7 @@ app.post("/generate-qr", (req, res) => {
     generatedAt,
     expiresAt,
     adminLocation: { lat, lon, accuracy },
-    usedDevices: new Set()
+    usedDevices: new Set(),
   };
 
   attendance = [];
@@ -47,13 +64,14 @@ app.post("/generate-qr", (req, res) => {
     res.json({
       qr,
       generatedAt: generatedAt.toLocaleString(),
-      expiresAt: expiresAt.toLocaleString()
+      expiresAt: expiresAt.toLocaleString(),
     });
   });
 });
 
-// Mark Attendance (Student)
-app.post("/mark-attendance", (req, res) => {
+/* ================= STUDENT: MARK ATTENDANCE ================= */
+
+app.post("/mark-attendance", async (req, res) => {
   const { name, roll, deviceId, sessionId, lat, lon, accuracy } = req.body;
 
   if (!currentSession || sessionId !== currentSession.id) {
@@ -82,22 +100,36 @@ app.post("/mark-attendance", (req, res) => {
 
   if (effectiveDistance > 50) {
     return res.status(403).json({
-      error: `Outside allowed range (${Math.round(effectiveDistance)} m)`
+      error: `Outside allowed range (${Math.round(effectiveDistance)} m)`,
     });
   }
 
   currentSession.usedDevices.add(deviceId);
 
-  attendance.push({
+  const record = {
     name,
     roll,
-    time: now.toLocaleTimeString()
+    time: now.toLocaleTimeString(),
+  };
+
+  attendance.push(record);
+
+  /* ===== SAVE TO GOOGLE SHEET ===== */
+
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: SPREADSHEET_ID,
+    range: "Attendance!A:C",
+    valueInputOption: "RAW",
+    resource: {
+      values: [[record.name, record.roll, record.time]],
+    },
   });
 
   res.json({ success: true });
 });
 
-// Download CSV (Admin)
+/* ================= ADMIN: DOWNLOAD CSV ================= */
+
 app.get("/download", (req, res) => {
   if (!currentSession) {
     return res.status(400).send("No session available");
@@ -118,5 +150,7 @@ app.get("/download", (req, res) => {
   res.send(csv);
 });
 
+/* ================= START SERVER ================= */
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Server running"));
+app.listen(PORT, () => console.log("Server running on port", PORT));
