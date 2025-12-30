@@ -6,10 +6,9 @@ const app = express();
 app.use(express.json());
 app.use(express.static("public"));
 
-/* ================= GOOGLE SHEETS SETUP ================= */
-
+/* ===== GOOGLE SHEETS CONFIG ===== */
 const SCOPES = ["https://www.googleapis.com/auth/spreadsheets"];
-const SPREADSHEET_ID = process.env.SPREADSHEET_ID; // set in Render ENV
+const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 
 const auth = new google.auth.GoogleAuth({
   credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
@@ -18,13 +17,30 @@ const auth = new google.auth.GoogleAuth({
 
 const sheets = google.sheets({ version: "v4", auth });
 
-/* ================= SESSION DATA ================= */
+/* ===== TIMEZONE CONFIG (INDIA) ===== */
+const IST_TIME = {
+  timeZone: "Asia/Kolkata",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: true,
+};
 
+const IST_DATE = {
+  timeZone: "Asia/Kolkata",
+  year: "numeric",
+  month: "long",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: true,
+};
+
+/* ===== SESSION DATA ===== */
 let currentSession = null;
 let attendance = [];
 
-/* ================= DISTANCE FUNCTION ================= */
-
+/* ===== DISTANCE FUNCTION ===== */
 function distance(lat1, lon1, lat2, lon2) {
   const R = 6371000;
   const toRad = v => (v * Math.PI) / 180;
@@ -40,8 +56,7 @@ function distance(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-/* ================= ADMIN: GENERATE QR ================= */
-
+/* ===== ADMIN: GENERATE QR ===== */
 app.post("/generate-qr", (req, res) => {
   const { lat, lon, accuracy } = req.body;
 
@@ -63,30 +78,24 @@ app.post("/generate-qr", (req, res) => {
   qrcode.toDataURL(qrURL).then(qr => {
     res.json({
       qr,
-      generatedAt: generatedAt.toLocaleString(),
-      expiresAt: expiresAt.toLocaleString(),
+      generatedAt: generatedAt.toLocaleString("en-IN", IST_DATE),
+      expiresAt: expiresAt.toLocaleString("en-IN", IST_DATE),
     });
   });
 });
 
-/* ================= STUDENT: MARK ATTENDANCE ================= */
-
+/* ===== STUDENT: MARK ATTENDANCE ===== */
 app.post("/mark-attendance", async (req, res) => {
   const { name, roll, deviceId, sessionId, lat, lon, accuracy } = req.body;
 
-  if (!currentSession || sessionId !== currentSession.id) {
+  if (!currentSession || sessionId !== currentSession.id)
     return res.status(400).json({ error: "Invalid session" });
-  }
 
-  const now = new Date();
-
-  if (now > currentSession.expiresAt) {
+  if (new Date() > currentSession.expiresAt)
     return res.status(403).json({ error: "QR expired" });
-  }
 
-  if (currentSession.usedDevices.has(deviceId)) {
+  if (currentSession.usedDevices.has(deviceId))
     return res.status(403).json({ error: "Attendance already marked from this device" });
-  }
 
   const d = distance(
     lat,
@@ -98,46 +107,37 @@ app.post("/mark-attendance", async (req, res) => {
   const effectiveDistance =
     d - accuracy - currentSession.adminLocation.accuracy;
 
-  if (effectiveDistance > 50) {
-    return res.status(403).json({
-      error: `Outside allowed range (${Math.round(effectiveDistance)} m)`,
-    });
-  }
+  if (effectiveDistance > 50)
+    return res.status(403).json({ error: "Outside 50m range" });
 
   currentSession.usedDevices.add(deviceId);
 
+  const now = new Date();
   const record = {
     name,
     roll,
-    time: now.toLocaleTimeString(),
+    time: now.toLocaleTimeString("en-IN", IST_TIME),
   };
 
   attendance.push(record);
-
-  /* ===== SAVE TO GOOGLE SHEET ===== */
 
   await sheets.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_ID,
     range: "Attendance!A:C",
     valueInputOption: "RAW",
-    resource: {
-      values: [[record.name, record.roll, record.time]],
-    },
+    resource: { values: [[record.name, record.roll, record.time]] },
   });
 
   res.json({ success: true });
 });
 
-/* ================= ADMIN: DOWNLOAD CSV ================= */
-
+/* ===== ADMIN: DOWNLOAD CSV ===== */
 app.get("/download", (req, res) => {
-  if (!currentSession) {
-    return res.status(400).send("No session available");
-  }
+  if (!currentSession) return res.status(400).send("No session");
 
   let csv = "";
-  csv += `QR Generated At,${currentSession.generatedAt.toLocaleString()}\n`;
-  csv += `QR Expires At,${currentSession.expiresAt.toLocaleString()}\n`;
+  csv += `QR Generated At,${currentSession.generatedAt.toLocaleString("en-IN", IST_DATE)}\n`;
+  csv += `QR Expires At,${currentSession.expiresAt.toLocaleString("en-IN", IST_DATE)}\n`;
   csv += `Attendance Window,2 Minutes\n\n`;
   csv += "Name,Roll No,Time\n";
 
@@ -149,8 +149,6 @@ app.get("/download", (req, res) => {
   res.setHeader("Content-Disposition", "attachment; filename=attendance.csv");
   res.send(csv);
 });
-
-/* ================= START SERVER ================= */
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("Server running on port", PORT));

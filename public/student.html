@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Student</title>
+  <title>Student - Attendance</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -10,21 +10,21 @@
   <h2>Mark Attendance</h2>
 
   <input id="name" placeholder="Name">
-  <input id="roll" placeholder="Roll No">
+  <input id="roll" placeholder="Roll Number">
   <button onclick="mark()">Submit</button>
+
+  <div class="info" id="status"></div>
 </div>
 
 <script>
 const params = new URLSearchParams(window.location.search);
 const sessionId = params.get("session");
 
-const deviceId =
-  localStorage.getItem("deviceId") ||
-  (() => {
-    const id = crypto.randomUUID();
-    localStorage.setItem("deviceId", id);
-    return id;
-  })();
+let deviceId = localStorage.getItem("deviceId");
+if (!deviceId) {
+  deviceId = crypto.randomUUID();
+  localStorage.setItem("deviceId", deviceId);
+}
 
 function mark() {
   navigator.geolocation.getCurrentPosition(pos => {
@@ -42,8 +42,11 @@ function mark() {
       })
     })
     .then(r => r.json())
-    .then(d => alert(JSON.stringify(d)));
-  }, err => alert("Location required"));
+    .then(d => {
+      document.getElementById("status").innerText =
+        d.success ? "Attendance marked successfully ✅" : d.error;
+    });
+  });
 }
 </script>
 
