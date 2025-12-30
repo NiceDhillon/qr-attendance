@@ -1,21 +1,31 @@
 const express = require("express");
 const qrcode = require("qrcode");
 const path = require("path");
+const { google } = require("googleapis");
 
 const app = express();
 app.use(express.json());
 app.use(express.static("public"));
 
+/* ================= GOOGLE SHEETS SETUP ================= */
+const auth = new google.auth.JWT(
+  process.env.GOOGLE_CLIENT_EMAIL,
+  null,
+  process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+  ["https://www.googleapis.com/auth/spreadsheets"]
+);
+
+const sheets = google.sheets({ version: "v4", auth });
+const SHEET_ID = process.env.GOOGLE_SHEET_ID;
+
+/* ================= GLOBAL STATE ================= */
 let currentSession = null;
 let attendance = [];
 
-/* ---------- IST (Delhi) Time Formatter ---------- */
+/* ================= IST TIME HELPERS ================= */
 function formatIST(date) {
   return date.toLocaleString("en-IN", {
     timeZone: "Asia/Kolkata",
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
@@ -23,7 +33,13 @@ function formatIST(date) {
   });
 }
 
-/* ---------- Distance (Haversine) ---------- */
+function formatISTDate(date) {
+  return date.toLocaleDateString("en-IN", {
+    timeZone: "Asia/Kolkata"
+  });
+}
+
+/* ================= DISTANCE FUNCTION ================= */
 function distance(lat1, lon1, lat2, lon2) {
   const R = 6371000;
   const toRad = v => (v * Math.PI) / 180;
@@ -37,12 +53,12 @@ function distance(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-/* ---------- Home → Admin ---------- */
+/* ================= ROOT → ADMIN ================= */
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "admin.html"));
 });
 
-/* ---------- Generate QR (Admin) ---------- */
+/* ================= GENERATE QR ================= */
 app.post("/generate-qr", async (req, res) => {
   const { lat, lon, accuracy } = req.body;
 
@@ -65,14 +81,13 @@ app.post("/generate-qr", async (req, res) => {
 
   res.json({
     qr,
-    generatedAt: formatIST(generatedAt),
-    expiresAt: formatIST(expiresAt),
-    duration: 120
+    generatedAt: `${formatISTDate(generatedAt)} ${formatIST(generatedAt)}`,
+    expiresAt: `${formatISTDate(expiresAt)} ${formatIST(expiresAt)}`
   });
 });
 
-/* ---------- Mark Attendance (Student) ---------- */
-app.post("/mark-attendance", (req, res) => {
+/* ================= MARK ATTENDANCE ================= */
+app.post("/mark-attendance", async (req, res) => {
   const { name, roll, deviceId, sessionId, lat, lon, accuracy } = req.body;
 
   if (!currentSession || sessionId !== currentSession.id)
@@ -103,16 +118,29 @@ app.post("/mark-attendance", (req, res) => {
 
   currentSession.usedDevices.add(deviceId);
 
-  attendance.push({
+  const record = {
     name,
     roll,
+    date: formatISTDate(now),
     time: formatIST(now)
+  };
+
+  attendance.push(record);
+
+  /* ===== SAVE TO GOOGLE SHEET ===== */
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: SHEET_ID,
+    range: "Attendance!A:D",
+    valueInputOption: "USER_ENTERED",
+    requestBody: {
+      values: [[record.name, record.roll, record.date, record.time]]
+    }
   });
 
   res.json({ success: true });
 });
 
-/* ---------- Session Status (Admin Polling) ---------- */
+/* ================= SESSION STATUS ================= */
 app.get("/session-status", (req, res) => {
   if (!currentSession) return res.json({ active: false });
 
@@ -120,25 +148,21 @@ app.get("/session-status", (req, res) => {
   const active = now <= currentSession.expiresAt;
   currentSession.active = active;
 
-  res.json({
-    active,
-    expiresAt: formatIST(currentSession.expiresAt)
-  });
+  res.json({ active });
 });
 
-/* ---------- Download CSV (ONLY after expiry) ---------- */
+/* ================= DOWNLOAD CSV ================= */
 app.get("/download", (req, res) => {
   if (!currentSession || currentSession.active)
     return res.status(403).send("Session still active");
 
   let csv = "";
-  csv += `QR Generated At,${formatIST(currentSession.generatedAt)}\n`;
-  csv += `QR Expired At,${formatIST(currentSession.expiresAt)}\n`;
-  csv += `Attendance Window,2 Minutes\n\n`;
-  csv += "Name,Roll No,Time\n";
+  csv += `QR Generated At,${formatISTDate(currentSession.generatedAt)} ${formatIST(currentSession.generatedAt)}\n`;
+  csv += `QR Expired At,${formatISTDate(currentSession.expiresAt)} ${formatIST(currentSession.expiresAt)}\n\n`;
+  csv += "Name,Roll No,Date,Time\n";
 
   attendance.forEach(a => {
-    csv += `${a.name},${a.roll},${a.time}\n`;
+    csv += `${a.name},${a.roll},${a.date},${a.time}\n`;
   });
 
   res.setHeader("Content-Type", "text/csv");
@@ -146,6 +170,6 @@ app.get("/download", (req, res) => {
   res.send(csv);
 });
 
-/* ---------- Start Server ---------- */
+/* ================= START SERVER ================= */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("Server running on port", PORT));
