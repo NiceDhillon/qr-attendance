@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Student</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="container">
+  <h2>Mark Attendance</h2>
+
+  <input id="name" placeholder="Name">
+  <input id="roll" placeholder="Roll No">
+  <button onclick="mark()">Submit</button>
+</div>
+
+<script>
+const params = new URLSearchParams(window.location.search);
+const sessionId = params.get("session");
+
+const deviceId =
+  localStorage.getItem("deviceId") ||
+  (() => {
+    const id = crypto.randomUUID();
+    localStorage.setItem("deviceId", id);
+    return id;
+  })();
+
+function mark() {
+  navigator.geolocation.getCurrentPosition(pos => {
+    fetch("/mark-attendance", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: document.getElementById("name").value,
+        roll: document.getElementById("roll").value,
+        deviceId,
+        sessionId,
+        lat: pos.coords.latitude,
+        lon: pos.coords.longitude,
+        accuracy: pos.coords.accuracy
+      })
+    })
+    .then(r => r.json())
+    .then(d => alert(JSON.stringify(d)));
+  }, err => alert("Location required"));
+}
+</script>
+
+</body>
+</html>
